@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>STARK — on-call memory</title>
+<style>
+  :root {
+    --bg:#0b0f14; --panel:#111823; --panel-2:#0e141d; --line:#1e2a38;
+    --text:#dbe6f2; --muted:#7d8fa3; --accent:#4ade80; --accent-dim:#173a28;
+    --warn:#fbbf24; --danger:#f87171; --info:#60a5fa; --violet:#a78bfa;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--info)}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;
+    border-bottom:1px solid var(--line);background:var(--panel-2);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.14em;font-size:15px}
+  .brand{color:var(--accent)}
+  .tag{color:var(--muted);font-size:12px}
+  .pills{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .pill{font-family:var(--mono);font-size:11px;padding:4px 9px;border-radius:999px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .pill b{color:var(--text);font-weight:600}
+  .pill.ok{border-color:var(--accent-dim);color:var(--accent)}
+  nav{display:flex;gap:4px;padding:0 22px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+  nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);
+    padding:11px 14px;cursor:pointer;font-size:13px;font-weight:500}
+  nav button.active{color:var(--text);border-bottom-color:var(--accent)}
+  main{padding:22px;max-width:1500px;margin:0 auto}
+  .grid{display:grid;gap:18px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-side{grid-template-columns:minmax(340px,420px) 1fr}
+  @media(max-width:1050px){.cols-2,.cols-side{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h3{margin:0 0 4px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .card h3 .badge{float:right;text-transform:none;letter-spacing:0}
+  textarea{width:100%;min-height:170px;background:#070b10;color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:12px;font-family:var(--mono);font-size:12.5px;resize:vertical}
+  input[type=text]{width:100%;background:#070b10;color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:12.5px}
+  button.act{background:var(--accent);color:#05140b;border:0;border-radius:8px;padding:10px 15px;
+    font-weight:650;cursor:pointer;font-size:13px}
+  button.act.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button.act:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chips{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+  .chip{text-align:left;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:8px 10px;cursor:pointer;font-size:12.5px}
+  .chip:hover{border-color:var(--accent)}
+  .chip small{display:block;color:var(--muted);margin-top:2px;font-size:11px}
+  .badge{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:999px;
+    border:1px solid var(--line);color:var(--muted)}
+  .badge.good{color:var(--accent);border-color:var(--accent-dim);background:#0e2418}
+  .badge.bad{color:var(--danger);border-color:#3b1d1d;background:#231111}
+  .badge.warn{color:var(--warn);border-color:#3a2f10;background:#241d0c}
+  .badge.info{color:var(--info);border-color:#16304d;background:#0d1c2e}
+  .badge.violet{color:var(--violet);border-color:#2c2450;background:#171331}
+  .verdict{font-size:15px;line-height:1.5;margin:10px 0 14px}
+  ul.clean{list-style:none;padding:0;margin:0}
+  ul.clean li{padding:9px 0;border-top:1px solid var(--line)}
+  ul.clean li:first-child{border-top:0}
+  .src{font-family:var(--mono);font-size:11px;color:var(--info)}
+  .why{color:var(--muted);font-size:12.5px}
+  .sec{margin-top:14px}
+  .sec>h4{margin:0 0 6px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .mem{border-left:2px solid var(--line);padding:6px 0 6px 10px;margin-bottom:6px;font-size:12.5px}
+  .mem .meta{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-bottom:3px}
+  .mem.observation{border-left-color:var(--violet)}
+  .mem.mental_model{border-left-color:var(--warn)}
+  .mem.experience{border-left-color:var(--accent)}
+  .mem.world{border-left-color:var(--info)}
+  .empty{color:var(--muted);font-style:italic;padding:8px 0}
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+  .kpi div{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:12px}
+  .kpi .n{font-size:24px;font-weight:700}
+  .kpi .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  td.mono,th.mono{font-family:var(--mono)}
+  .note{background:var(--panel-2);border:1px dashed var(--line);border-radius:8px;padding:10px 12px;
+    color:var(--muted);font-size:12.5px}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .hide{display:none}
+  .rec{border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:10px;background:var(--panel-2)}
+  .rec.decided{border-color:var(--accent-dim)}
+  .rec.demoted{opacity:.72;border-style:dashed}
+  .rec .act-text{font-size:13.5px;line-height:1.5;margin:6px 0}
+  .dec{font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid var(--line);
+    background:transparent;color:var(--text);cursor:pointer}
+  .dec[data-d="approve"]:hover{border-color:var(--accent);color:var(--accent)}
+  .dec[data-d="reject"]:hover{border-color:var(--danger);color:var(--danger)}
+  .dec[data-d="investigate"]:hover{border-color:var(--warn);color:var(--warn)}
+  .dec-note{margin-top:8px;width:100%;background:#070b10;color:var(--text);border:1px solid var(--line);
+    border-radius:7px;padding:7px 9px;font-size:12px}
+  .track{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .track b{color:var(--text);font-weight:600}
+  .voicebar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;
+    padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px}
+  .mic{width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:transparent;
+    color:var(--text);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+  .mic.live{border-color:var(--danger);color:var(--danger);animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .vstatus{flex:1;min-width:180px;font-size:12.5px;color:var(--muted)}
+  .vstatus b{color:var(--text);font-weight:600}
+  label.f{display:block;font-size:11px;color:var(--muted);margin:8px 0 3px;text-transform:uppercase;letter-spacing:.05em}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="brand">STARK</div>
+    <div class="tag">on-call incident intelligence that remembers · built on Hindsight</div>
+  </div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<nav>
+  <button class="active" data-tab="triage">Triage</button>
+  <button data-tab="memory">Memory</button>
+  <button data-tab="learning">Learning</button>
+  <button data-tab="teach">Teach it</button>
+</nav>
+
+<main>
+
+<!-- ===================== TRIAGE ===================== -->
+<section id="tab-triage">
+  <div class="grid cols-side">
+    <div class="card">
+      <h3>Incoming alert</h3>
+      <textarea id="alert" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="act" id="btn-compare">Run comparison</button>
+        <button class="act ghost" id="btn-memory-only">Memory only</button>
+        <button class="act ghost" id="btn-seed">Seed memory</button>
+      </div>
+      <div class="voicebar">
+        <button class="mic" id="btn-mic" aria-label="Start voice input" title="Voice input">&#9679;</button>
+        <div class="vstatus" id="vstatus">Say <b>"STARK, investigate this alert"</b></div>
+        <button class="act ghost" id="btn-speak">Speak brief</button>
+      </div>
+      <div class="chips" id="demo-chips"></div>
+      <div class="note">Same alert, two agents. The left one is what you get without an incident
+        memory. The right one is grounded in this team's history and cites the incidents it learned from.</div>
+    </div>
+
+    <div class="grid cols-2" id="results">
+      <div class="card"><h3>Without memory</h3><div class="empty">Run a comparison to begin.</div></div>
+      <div class="card"><h3>With Hindsight memory</h3><div class="empty">Run a comparison to begin.</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h3>Memories recalled for this alert <span class="badge" id="recall-count"></span></h3>
+    <div id="recall-list"><div class="empty">Nothing recalled yet.</div></div>
+  </div>
+</section>
+
+<!-- ===================== MEMORY ===================== -->
+<section id="tab-memory" class="hide">
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>Query the memory bank directly</h3>
+      <input type="text" id="q" placeholder="e.g. what has caused payments-api latency before?" />
+      <div class="row" style="margin-top:10px"><button class="act" id="btn-recall">Recall</button></div>
+      <div id="recall-raw" style="margin-top:12px"><div class="empty">No query yet.</div></div>
+    </div>
+    <div class="card">
+      <h3>Observations <span class="badge violet">consolidated from many incidents</span></h3>
+      <div class="note" style="margin-bottom:10px">Hindsight merges overlapping facts into
+        deduplicated, evidence-backed beliefs. These are not stored anywhere — they are what the
+        agent worked out from the raw incident record.</div>
+      <div id="obs"><div class="empty">Seed memory to populate.</div></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:18px">
+    <h3>Decision log <span class="badge violet">what humans did with STARK's advice</span></h3>
+    <div class="note" style="margin-bottom:10px">STARK proposes, a person decides, and the decision
+      is written back to memory as an experience fact. Next time a similar alert fires, the recall
+      that surfaces past incidents also surfaces past decisions about them.</div>
+    <div id="decisions"><div class="empty">No decisions recorded yet.</div></div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h3>Incident corpus in memory</h3>
+    <div id="incidents"><div class="empty">Loading…</div></div>
+  </div>
+</section>
+
+<!-- ===================== LEARNING ===================== -->
+<section id="tab-learning" class="hide">
+  <div class="card">
+    <h3>Does it actually get better?
+      <span class="badge info">held-out replay</span>
+      <span class="badge warn">synthetic corpus</span></h3>
+    <div class="note" style="margin:8px 0 14px">
+      The full incident history is replayed in chronological order against an empty memory.
+      Each incident is scored using <em>only</em> the memories that existed before it — no lookahead.
+      Coverage is the share of incidents the agent could correctly brief from memory; it starts at
+      zero because there is nothing to remember yet.
+      <b style="color:var(--warn)">These are replay-evaluation results on a synthetic 21-incident
+      corpus written for this project — not production measurements.</b>
+      Every formula is shown below and derived in <span class="src">METRICS.md</span>.
+    </div>
+    <div class="kpi" id="lc-kpi"></div>
+    <div id="lc-chart" style="margin-top:20px"></div>
+  </div>
+
+  <div class="grid cols-2" style="margin-top:18px">
+    <div class="card">
+      <h3>Time to resolve: first time vs. repeat</h3>
+      <div id="mttr-chart"></div>
+    </div>
+    <div class="card">
+      <h3>Failure families</h3>
+      <div id="families"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TEACH ===================== -->
+<section id="tab-teach" class="hide">
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>Close the loop</h3>
+      <div class="note">This is the whole point. Record what actually happened and it becomes memory
+        immediately — then go back to the Triage tab, paste the same alert again, and watch a novel
+        alert turn into a grounded brief.</div>
+      <label class="f">Incident ID</label><input type="text" id="t-id" value="INC-1161" />
+      <label class="f">Service</label><input type="text" id="t-service" value="webhook-dispatcher" />
+      <label class="f">Failure class</label><input type="text" id="t-family" value="merchant-tls-trust-failure" />
+      <label class="f">Alert title</label><input type="text" id="t-title" value="webhook delivery success rate 61%, x509 unknown authority" />
+      <label class="f">Root cause</label><input type="text" id="t-cause" value="A CA bundle update in the base image dropped two intermediate roots that 40% of merchant endpoints chain to." />
+      <label class="f">Fix that worked</label><input type="text" id="t-fix" value="Pin the previous ca-certificates package and redeploy, then add a merchant TLS chain audit to the weekly job." />
+      <label class="f">False lead (what wasted time)</label><input type="text" id="t-false" value="Twenty minutes were spent on merchant-side firewall rules before anyone checked the base image diff." />
+      <label class="f">Minutes to resolve</label><input type="text" id="t-mttr" value="58" />
+      <div class="row" style="margin-top:14px"><button class="act" id="btn-teach">Retain to memory</button></div>
+      <div id="teach-result" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <h3>How memory is used</h3>
+      <ul class="clean" style="font-size:13px">
+        <li><b>retain</b> — every incident is decomposed into world facts (what was true of the
+          system) and experience facts (what this team did: the fix, and the false lead that cost
+          minutes). Each carries service, failure class, MTTR and incident ID as metadata.</li>
+        <li><b>recall</b> — an incoming alert is fingerprinted and searched four ways at once:
+          keyword, semantic, entity-graph and temporal. A second hop then pulls the root cause,
+          fix and false lead for the incidents that ranked highest.</li>
+        <li><b>observations</b> — repeated facts are consolidated into evidence-backed beliefs with
+          a proof count, so the agent can say "3 of 3 times, this was the fix".</li>
+        <li><b>mental models</b> — curated team playbooks that outrank everything else during
+          reasoning.</li>
+        <li><b>grounding gate</b> — if nothing in memory genuinely resembles the alert, the agent
+          says so instead of pattern-matching. An on-call agent that confidently cites the wrong
+          incident is worse than one with no memory at all.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, body) {
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
+  const r = await fetch('/api' + path, opt);
+  if (!r.ok) throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail || r.statusText);
+  return r.json();
+}
+
+/* ---------------- tabs ---------------- */
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.toggle('active', x === b));
+  $$('main > section').forEach(s => s.classList.add('hide'));
+  $('#tab-' + b.dataset.tab).classList.remove('hide');
+  if (b.dataset.tab === 'learning') loadLearning();
+  if (b.dataset.tab === 'memory') loadMemory();
+});
+
+/* ---------------- status ---------------- */
+async function loadStatus() {
+  const s = await api('/status');
+  $('#pills').innerHTML = `
+    <span class="pill ${s.memory_backend === 'hindsight' ? 'ok' : ''}">memory <b>${esc(s.memory_backend)}</b></span>
+    <span class="pill">bank <b>${esc(s.memory.bank_id)}</b></span>
+    <span class="pill">facts <b>${s.memory.facts ?? 0}</b></span>
+    <span class="pill">observations <b>${s.memory.observations ?? 0}</b></span>
+    <span class="pill ${s.llm_configured ? 'ok' : ''}">llm <b>${esc(s.llm_model)}</b></span>`;
+  return s;
+}
+
+/* ---------------- demo alerts ---------------- */
+async function loadAlerts() {
+  const {alerts} = await api('/demo-alerts');
+  $('#demo-chips').innerHTML = alerts.map((a, i) =>
+    `<button class="chip" data-i="${i}">${esc(a.label)}<small>${esc(a.expect)}</small></button>`).join('');
+  $$('#demo-chips .chip').forEach(c => c.onclick = () => { $('#alert').value = alerts[c.dataset.i].text; });
+  if (alerts.length) $('#alert').value = alerts[0].text;
+}
+
+/* ---------------- brief rendering ---------------- */
+function briefCard(title, b, isMemory) {
+  const conf = {high:'good', medium:'warn', low:'bad'}[b.confidence] || '';
+  const list = (arr, fn) => arr && arr.length
+    ? `<ul class="clean">${arr.map(fn).join('')}</ul>` : `<div class="empty">none</div>`;
+
+  const grounded = isMemory
+    ? (b.memory_grounded
+        ? `<span class="badge good">grounded in ${b.similar_incidents.length || (b.recalled_incidents||[]).length} past incidents</span>`
+        : `<span class="badge warn">no precedent in memory</span>`)
+    : `<span class="badge bad">no memory</span>`;
+
+  return `<div class="card">
+    <h3>${esc(title)} <span class="badge">${b.latency_ms ?? '–'} ms</span></h3>
+    <div class="row" style="margin:8px 0">
+      ${grounded}
+      <span class="badge ${conf}">confidence: ${esc(b.confidence)}</span>
+      ${b.estimated_mttr_minutes ? `<span class="badge info">est. ${b.estimated_mttr_minutes} min to resolve</span>` : ''}
+      <span class="badge">${esc(b.synthesis || '')}</span>
+    </div>
+    <div class="verdict">${esc(b.verdict)}</div>
+
+    ${isMemory && b.similar_incidents?.length ? `<div class="sec"><h4>Similar past incidents</h4>
+      ${list(b.similar_incidents, i => `<li><span class="src">${esc(i.incident_id)}</span>
+        <span class="badge">${esc(i.similarity||'')}</span><div class="why">${esc(i.why)}</div></li>`)}</div>` : ''}
+
+    <div class="sec"><h4>Likely root causes</h4>
+      ${list(b.likely_root_causes, c => `<li>${esc(c.cause)}
+        ${c.supporting_incidents?.length ? `<div class="src">evidence: ${c.supporting_incidents.map(esc).join(', ')}</div>` : ''}</li>`)}</div>
+
+    <div class="sec"><h4>First actions</h4>
+      ${list(b.first_actions, a => `<li>${esc(a.step)}
+        <div class="why">${esc(a.rationale)}</div>
+        ${a.source_incident ? `<div class="src">from ${esc(a.source_incident)}</div>` : ''}</li>`)}</div>
+
+    ${isMemory && b.recommendations?.length ? `<div class="sec">
+      <h4>Recommended actions — your call
+        <span class="badge violet">${b.recommendations.length} awaiting a decision</span></h4>
+      ${b.recommendations.map(recCard).join('')}</div>` : ''}
+
+    ${isMemory && b.prior_decisions?.length ? `<div class="sec">
+      <h4>What this team decided last time <span class="badge violet">recalled from memory</span></h4>
+      ${b.prior_decisions.map(p => `<div class="mem experience">
+        <div class="meta">${esc(p.decision || '')}${p.outcome && p.outcome !== 'unknown' ? ' · ' + esc(p.outcome) : ''}</div>
+        ${esc(p.text)}</div>`).join('')}</div>` : ''}
+
+    <div class="sec"><h4>Do NOT do <span class="badge ${b.do_not_do?.length ? 'bad' : ''}">${b.do_not_do?.length || 0}</span></h4>
+      ${list(b.do_not_do, d => `<li>${esc(d.action)}
+        <div class="why">${esc(d.reason)}</div>
+        ${d.source_incident ? `<div class="src">learned the hard way in ${esc(d.source_incident)}</div>` : ''}</li>`)}</div>
+
+    <div class="sec"><h4>Open questions</h4>
+      ${list(b.open_questions, q => `<li class="why">${esc(q)}</li>`)}</div>
+  </div>`;
+}
+
+const recMap = {};
+
+function recCard(r) {
+  recMap[r.key] = r;
+  const risk = {high:'bad', medium:'warn', low:'good'}[r.risk] || '';
+  const t = r.track_record || {};
+  const track = t.seen ? `<div class="track"><b>Track record:</b> ${esc(t.summary)}${
+      t.last_rejection_note ? ` — last rejected because: "${esc(t.last_rejection_note)}"` : ''}</div>` : '';
+  return `<div class="rec ${t.demoted ? 'demoted' : ''}" id="rec-${esc(r.key)}">
+    <div class="row">
+      <span class="badge ${risk}">${esc(r.risk)} risk</span>
+      ${t.demoted ? '<span class="badge warn">demoted by past decisions</span>' : ''}
+      ${t.worked ? '<span class="badge good">worked before</span>' : ''}
+      ${t.rejected && !t.approved ? '<span class="badge bad">rejected before</span>' : ''}
+      <span class="src">${esc(r.key)}</span>
+    </div>
+    <div class="act-text">${esc(r.action)}</div>
+    <div class="why">${esc(r.expected_impact)}</div>
+    ${r.evidence?.length ? `<div class="src">evidence: ${r.evidence.map(esc).join(', ')}</div>` : ''}
+    ${track}
+    <input class="dec-note" id="note-${esc(r.key)}" placeholder="Reason (optional — STARK remembers it)" />
+    <div class="row" style="margin-top:8px">
+      <button class="dec" data-key="${esc(r.key)}" data-d="approve">Approve</button>
+      <button class="dec" data-key="${esc(r.key)}" data-d="investigate">Investigate first</button>
+      <button class="dec" data-key="${esc(r.key)}" data-d="reject">Reject</button>
+    </div>
+  </div>`;
+}
+
+async function decide(key, d) {
+  const r = recMap[key]; if (!r) return;
+  const note = ($('#note-' + key) || {}).value || '';
+  const res = await api('/decision', {
+    recommendation_key: key, decision: d, action: r.action, service: r.service,
+    failure_class: r.failure_class, decided_by: 'on-call', note,
+    alert_title: ($('#alert').value || '').split('\n')[0],
+  });
+  const card = $('#rec-' + key);
+  card.classList.add('decided');
+  const verb = {approve:'Approved', reject:'Rejected', investigate:'Flagged for investigation'}[d];
+  card.innerHTML = `<div class="row"><span class="badge ${d === 'reject' ? 'bad' : 'good'}">${verb}</span>
+      <span class="src">${esc(key)}</span></div>
+    <div class="act-text">${esc(r.action)}</div>
+    <div class="track"><b>Written to memory:</b> ${esc(res.memory)}</div>
+    <div class="track"><b>Track record now:</b> ${esc(res.track_record.summary)}</div>
+    ${d === 'approve' ? `<div class="row" style="margin-top:10px">
+      <span class="why">Did it work?</span>
+      <button class="dec" data-key="${esc(key)}" data-o="worked">It worked</button>
+      <button class="dec" data-key="${esc(key)}" data-o="did_not_work">It did not</button>
+    </div>` : ''}
+    <div class="note" style="margin-top:10px">Run the same alert again — this decision now shapes
+      what STARK recommends.</div>`;
+  loadStatus();
+}
+
+async function decideOutcome(key, outcome) {
+  const res = await api('/decision/outcome', {recommendation_key: key, outcome, note: ''});
+  const card = $('#rec-' + key);
+  card.insertAdjacentHTML('beforeend',
+    `<div class="track" style="margin-top:8px"><b>Outcome recorded:</b> ${esc(res.memory)}</div>`);
+  loadStatus();
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('.dec'); if (!b) return;
+  if (b.dataset.o) decideOutcome(b.dataset.key, b.dataset.o);
+  else decide(b.dataset.key, b.dataset.d);
+});
+
+function renderRecall(hits) {
+  $('#recall-count').textContent = hits.length ? hits.length + ' memories' : '';
+  $('#recall-list').innerHTML = hits.length ? hits.map(h => `
+    <div class="mem ${esc(h.type)}">
+      <div class="meta">${esc(h.type)} · score ${h.score} · ${(h.strategies||[]).map(esc).join(' + ')}
+        ${h.metadata?.incident_id ? ' · ' + esc(h.metadata.incident_id) : ''}
+        ${h.proof_count > 1 ? ' · ' + h.proof_count + ' proofs' : ''}</div>
+      ${esc(h.text)}
+    </div>`).join('') : '<div class="empty">Nothing recalled.</div>';
+}
+
+/* ---------------- actions ---------------- */
+async function runCompare() {
+  const alert = $('#alert').value.trim();
+  if (!alert) return;
+  $('#results').innerHTML = `<div class="card"><h3>Working</h3><div class="empty"><span class="spin"></span> thinking without memory…</div></div>
+                             <div class="card"><h3>Working</h3><div class="empty"><span class="spin"></span> recalling incident history…</div></div>`;
+  try {
+    const r = await api('/compare', {alert});
+    lastBrief = r.with_memory;
+    $('#results').innerHTML = briefCard('Without memory', r.without_memory, false)
+                            + briefCard('With Hindsight memory', r.with_memory, true);
+    renderRecall(r.with_memory.memory_hits || []);
+    if (speakNext) { speakNext = false; speak(lastBrief.spoken); }
+  } catch (e) {
+    $('#results').innerHTML = `<div class="card"><h3>Error</h3><div class="empty">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function runMemoryOnly() {
+  const alert = $('#alert').value.trim();
+  if (!alert) return;
+  const r = await api('/triage', {alert, use_memory: true});
+  lastBrief = r;
+  $('#results').innerHTML = briefCard('With Hindsight memory', r, true);
+  renderRecall(r.memory_hits || []);
+  if (speakNext) { speakNext = false; speak(r.spoken); }
+}
+
+$('#btn-compare').onclick = runCompare;
+$('#btn-memory-only').onclick = runMemoryOnly;
+$('#btn-seed').onclick = async e => {
+  e.target.disabled = true; e.target.textContent = 'Seeding…';
+  await api('/seed', {}); await loadStatus();
+  e.target.disabled = false; e.target.textContent = 'Seed memory';
+};
+
+/* ---------------- memory tab ---------------- */
+async function loadMemory() {
+  const {observations} = await api('/memory/observations');
+  $('#obs').innerHTML = observations.length ? observations.map(o => `
+    <div class="mem observation">
+      <div class="meta">${esc(o.service||'')} · ${esc(o.failure_class||'')} · ${o.proof_count} supporting incidents
+        ${o.incident_ids ? ' · ' + o.incident_ids.map(esc).join(', ') : ''}</div>
+      ${esc(o.text)}
+    </div>`).join('') : '<div class="empty">Seed memory to populate.</div>';
+
+  const dec = await api('/decisions');
+  const ds = dec.stats;
+  $('#decisions').innerHTML = ds.decisions ? `
+    <div class="kpi" style="margin-bottom:12px">
+      <div><div class="n">${ds.decisions}</div><div class="l">decisions</div></div>
+      <div><div class="n" style="color:var(--accent)">${ds.approved}</div><div class="l">approved</div></div>
+      <div><div class="n" style="color:var(--danger)">${ds.rejected}</div><div class="l">rejected</div></div>
+      <div><div class="n">${ds.confirmed_worked}</div><div class="l">confirmed to work</div></div>
+    </div>` + dec.recent.map(d => `<div class="mem experience">
+      <div class="meta">${esc(d.decision)} by ${esc(d.decided_by)} · ${esc(d.decided_at.slice(0,16).replace('T',' '))}
+        ${d.outcome && d.outcome !== 'unknown' ? ' · outcome: ' + esc(d.outcome) : ''}</div>
+      ${esc(d.action)}${d.note ? `<div class="why">Reason: ${esc(d.note)}</div>` : ''}</div>`).join('')
+    : '<div class="empty">No decisions recorded yet. Triage an alert and rule on a recommendation.</div>';
+
+  const {incidents} = await api('/incidents');
+  $('#incidents').innerHTML = `<table><thead><tr><th class="mono">ID</th><th>Date</th><th>Service</th>
+    <th>Failure family</th><th>Sev</th><th>MTTR</th><th>Alert</th></tr></thead><tbody>` +
+    incidents.map(i => `<tr><td class="mono">${esc(i.incident_id)}</td><td>${esc(i.opened_at.slice(0,10))}</td>
+      <td>${esc(i.service)}</td><td>${esc(i.failure_class)}</td><td>${esc(i.severity)}</td>
+      <td>${i.mttr_minutes}m</td><td class="why">${esc(i.alert_title)}</td></tr>`).join('') + '</tbody></table>';
+}
+
+$('#btn-recall').onclick = async () => {
+  const query = $('#q').value.trim(); if (!query) return;
+  const r = await api('/recall', {query, limit: 15});
+  $('#recall-raw').innerHTML = r.hits.length ? r.hits.map(h => `
+    <div class="mem ${esc(h.type)}">
+      <div class="meta">${esc(h.type)} · ${h.score} · ${(h.strategies||[]).join(' + ')}</div>${esc(h.text)}
+    </div>`).join('') : '<div class="empty">No matches.</div>';
+};
+
+/* ---------------- learning tab ---------------- */
+function lineChart(points, width=900, height=260) {
+  const pad = {l:46, r:16, t:14, b:34};
+  const W = width, H = height;
+  const xs = i => pad.l + i * (W - pad.l - pad.r) / Math.max(points.length - 1, 1);
+  const ys = v => H - pad.b - v * (H - pad.t - pad.b);
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${xs(i).toFixed(1)},${ys(p.coverage).toFixed(1)}`).join(' ');
+  const area = path + ` L${xs(points.length-1).toFixed(1)},${ys(0)} L${xs(0).toFixed(1)},${ys(0)} Z`;
+  const gridY = [0,.25,.5,.75,1].map(v =>
+    `<line x1="${pad.l}" x2="${W-pad.r}" y1="${ys(v)}" y2="${ys(v)}" stroke="#1e2a38"/>
+     <text x="${pad.l-8}" y="${ys(v)+4}" fill="#7d8fa3" font-size="10" text-anchor="end">${Math.round(v*100)}%</text>`).join('');
+  const dots = points.map((p,i) => `<circle cx="${xs(i)}" cy="${ys(p.coverage)}" r="3.2"
+      fill="${p.precedent_surfaced ? '#4ade80' : (p.had_prior_family_incident ? '#f87171' : '#334155')}">
+      <title>${p.incident_id} · ${p.failure_class} · ${p.outcome} · memory: ${p.memory_size} facts</title></circle>`).join('');
+  const labels = points.filter((_,i)=>i%4===0).map((p,j) =>
+    `<text x="${xs(j*4)}" y="${H-12}" fill="#7d8fa3" font-size="9.5" text-anchor="middle">${p.incident_id.replace('INC-','')}</text>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    ${gridY}
+    <path d="${area}" fill="#4ade8018"/>
+    <path d="${path}" fill="none" stroke="#4ade80" stroke-width="2"/>
+    ${dots}${labels}
+    <text x="${pad.l}" y="11" fill="#7d8fa3" font-size="10">coverage — share of incidents the agent could brief from memory</text>
+  </svg>`;
+}
+
+function mttrChart(m) {
+  const a = m.first_of_family_median_mttr || 0, b = m.repeat_median_mttr || 0;
+  const max = Math.max(a, b, 1);
+  const bar = (label, v, color) => `
+    <div style="margin:12px 0">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#7d8fa3">
+        <span>${label}</span><span style="color:#dbe6f2;font-family:var(--mono)">${v} min</span></div>
+      <div style="height:14px;background:#0e141d;border-radius:7px;margin-top:5px;overflow:hidden">
+        <div style="height:100%;width:${(v/max*100).toFixed(1)}%;background:${color};border-radius:7px"></div></div>
+    </div>`;
+  return bar('First time the team saw this failure family (median)', a, '#f87171')
+       + bar('A repeat, with the earlier incident in memory (median)', b, '#4ade80')
+       + `<div class="note" style="margin-top:12px">
+            <b style="color:#4ade80">${m.mttr_reduction_pct_median ?? '–'}%</b> lower median time
+            to resolve once the team had seen the failure family before
+            (<span class="src">${esc(m.derivation_median || '')}</span>).
+            By mean it is ${m.mttr_reduction_pct ?? '–'}%
+            (<span class="src">${esc(m.derivation_mean || '')}</span>), but
+            ${esc(m.outlier_note || '')}
+            <br><br>This is a property of the corpus, not a result STARK produced — it is the
+            reason the product exists, not evidence that it works.</div>`;
+}
+
+async function loadLearning() {
+  $('#lc-chart').innerHTML = '<div class="empty"><span class="spin"></span> replaying incident history…</div>';
+  const lc = await api('/learning-curve');
+  const c = lc.confusion;
+  const p = lc.provenance;
+  $('#lc-kpi').innerHTML = `
+    <div><div class="n" style="color:#4ade80">${Math.round(lc.coverage*100)}%</div><div class="l">final coverage</div></div>
+    <div><div class="n">${Math.round(lc.recall_when_precedent_exists*100)}%</div><div class="l">precedent found when one existed</div></div>
+    <div><div class="n">${c.true_negative}/${c.true_negative + c.false_positive}</div><div class="l">novel alerts correctly flagged novel</div></div>
+    <div><div class="n">${lc.incidents_with_precedent}/${lc.total_incidents}</div><div class="l">incidents with a precedent</div></div>`;
+  $('#lc-chart').innerHTML = lineChart(lc.points) + `
+    <div class="note" style="margin-top:14px">
+      <b style="color:var(--text)">How these are calculated</b><br>
+      <span class="src">coverage</span> = ${esc(p.formulas.coverage)} = ${Math.round(lc.coverage*100)}%<br>
+      <span class="src">recall when a precedent exists</span> = ${esc(p.formulas.recall_when_precedent_exists)}<br>
+      <span class="src">false positives on novel alerts</span> = ${esc(p.formulas.false_positive_rate_on_novel)}<br><br>
+      <b style="color:var(--text)">Method.</b> ${esc(p.method)}<br><br>
+      <b style="color:var(--text)">A true positive means</b> ${esc(p.definitions.precedent_surfaced)}<br><br>
+      <b style="color:var(--warn)">Caveat.</b> ${esc(p.caveat)}
+    </div>`;
+  $('#mttr-chart').innerHTML = mttrChart(lc.mttr);
+  $('#families').innerHTML = `<table><thead><tr><th>Failure family</th><th>Seen</th>
+    <th class="mono">MTTR trend</th></tr></thead><tbody>` +
+    lc.families.map(f => `<tr><td>${esc(f.failure_class)}</td><td>${f.occurrences}x</td>
+      <td class="mono">${f.mttr_series.join(' → ')} min</td></tr>`).join('') + '</tbody></table>' +
+    `<div class="note" style="margin-top:10px">${c.false_positive} false positives, all of them a
+      different failure family <em>on the same service</em> — the retrieval never reached for an
+      unrelated service.</div>`;
+}
+
+/* ---------------- teach ---------------- */
+$('#btn-teach').onclick = async e => {
+  e.target.disabled = true;
+  try {
+    const r = await api('/outcome', {
+      incident_id: $('#t-id').value, service: $('#t-service').value,
+      failure_class: $('#t-family').value, alert_title: $('#t-title').value,
+      root_cause: $('#t-cause').value, fix: $('#t-fix').value,
+      mttr_minutes: parseInt($('#t-mttr').value || '0', 10),
+      false_leads: $('#t-false').value, responder: 'demo',
+    });
+    $('#teach-result').innerHTML = `<div class="note" style="border-style:solid;border-color:#173a28;color:#4ade80">
+      Retained ${r.retained} memories for ${esc(r.incident_id)}. Memory now holds ${r.facts} facts and
+      ${r.observations} observations. Go back to Triage, paste the webhook alert again, and it is no
+      longer novel.</div>`;
+    await loadStatus();
+  } catch (err) {
+    $('#teach-result').innerHTML = `<div class="note">${esc(err.message)}</div>`;
+  }
+  e.target.disabled = false;
+};
+
+/* ---------------- voice ---------------- */
+let lastBrief = null, speakNext = false, listening = false, recog = null;
+
+function vsay(html) { $('#vstatus').innerHTML = html; }
+
+function speak(text) {
+  if (!text || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.05; u.pitch = 1; u.lang = 'en-US';
+  const v = speechSynthesis.getVoices().find(x => /en-(GB|US)/.test(x.lang) && !/google/i.test(x.name))
+         || speechSynthesis.getVoices().find(x => /^en/.test(x.lang));
+  if (v) u.voice = v;
+  u.onend = () => vsay('Say <b>"STARK, investigate this alert"</b>');
+  vsay('<b>Speaking…</b>');
+  speechSynthesis.speak(u);
+}
+
+function sentence(list, lead, get) {
+  if (!list || !list.length) return null;
+  return lead + ' ' + list.slice(0, 2).map(get).join(' Also, ') + '.';
+}
+
+async function handleCommand(raw) {
+  // Recognisers routinely hear "start", "spark" or "stock" for "STARK".
+  const t = raw.toLowerCase().replace(/\b(stark|start|spark|stock|starc)\b[,\s]*/g, '').trim();
+  vsay(`Heard: <b>${esc(raw)}</b>`);
+
+  if (/\b(stop|quiet|shut up|cancel)\b/.test(t)) { speechSynthesis.cancel(); return; }
+
+  if (/\b(why|cause|root cause|reason)\b/.test(t)) {
+    if (!lastBrief) return speak('Run a triage first and I will explain the causes.');
+    return speak(sentence(lastBrief.likely_root_causes, 'The most likely causes are:',
+      c => c.cause + (c.supporting_incidents?.length ? ', from incident ' + c.supporting_incidents[0].replace('INC-','') : ''))
+      || 'I have no root causes for this alert.');
+  }
+
+  if (/\b(avoid|not do|don't|dont|warning|mistake|dead end)\b/.test(t)) {
+    if (!lastBrief) return speak('Run a triage first.');
+    return speak(sentence(lastBrief.do_not_do, 'Do not do the following:',
+      d => d.action + ' That cost time in incident ' + (d.source_incident || '').replace('INC-',''))
+      || 'I have no recorded dead ends for this alert.');
+  }
+
+  if (/\b(next|another|different)\b/.test(t)) {
+    const chips = $$('#demo-chips .chip');
+    if (chips.length) { chipIndex = (chipIndex + 1) % chips.length; chips[chipIndex].click();
+      vsay('Loaded: <b>' + esc(chips[chipIndex].textContent.split('\n')[0].slice(0, 44)) + '</b>'); }
+    return;
+  }
+
+  if (/\b(repeat|again|say that)\b/.test(t)) {
+    return speak(lastBrief ? lastBrief.spoken : 'Nothing to repeat yet.');
+  }
+
+  speakNext = true;
+  vsay('<b>Investigating…</b>');
+  await runCompare();
+}
+
+let chipIndex = 0;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  recog = new SR();
+  recog.continuous = false; recog.interimResults = true; recog.lang = 'en-US';
+  recog.onresult = e => {
+    let final = '', interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      (e.results[i].isFinal ? final += e.results[i][0].transcript : interim += e.results[i][0].transcript);
+    }
+    if (interim) vsay('<b>' + esc(interim) + '</b>');
+    if (final) handleCommand(final.trim());
+  };
+  recog.onerror = e => vsay('Microphone error: <b>' + esc(e.error) + '</b>. Buttons still work.');
+  recog.onend = () => { listening = false; $('#btn-mic').classList.remove('live'); };
+  $('#btn-mic').onclick = () => {
+    if (listening) { recog.stop(); return; }
+    speechSynthesis.cancel();
+    try { recog.start(); listening = true; $('#btn-mic').classList.add('live');
+          vsay('<b>Listening…</b> try "STARK, investigate this alert"'); }
+    catch (err) { vsay('Could not start the microphone.'); }
+  };
+} else {
+  $('#btn-mic').style.display = 'none';
+  vsay('Voice input needs Chrome or Edge. <b>Speak brief</b> works everywhere.');
+}
+
+$('#btn-speak').onclick = () => speak(lastBrief ? lastBrief.spoken
+  : 'Run a triage first, then I will read the briefing out loud.');
+
+/* ---------------- boot ---------------- */
+(async () => {
+  const s = await loadStatus();
+  await loadAlerts();
+  if (!s.seeded) { await api('/seed', {}); await loadStatus(); }
+})();
+</script>
+</body>
+</html>

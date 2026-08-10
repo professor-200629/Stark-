@@ -1,0 +1,14 @@
+# Core — everything STARK needs to run the full demo.
+fastapi>=0.110
+uvicorn>=0.27
+httpx>=0.26
+pydantic>=2.5
+python-dotenv>=1.0
+pytest>=8.0
+
+# Optional: the real Hindsight backend.
+#   pip install hindsight-client
+# STARK runs without it via the bundled local memory engine, and switches
+# to Hindsight automatically once the package is installed and
+# HINDSIGHT_BASE_URL is set. It is deliberately NOT pinned here so a version
+# mismatch can never block the core install.
