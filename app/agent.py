@@ -443,6 +443,7 @@ class StarkAgent:
                     "memory_used": 0,
                     "fingerprint": fp,
                     "latency_ms": _ms_since(started),
+                    "memory_impact": self.memory_impact(brief),
                 }
             )
             brief["spoken"] = speakable(brief)
@@ -478,11 +479,30 @@ class StarkAgent:
                 "latency_ms": _ms_since(started),
             }
         )
+        # An LLM often omits the MTTR estimate, or returns something unparseable.
+        # The number should come from the recalled incidents anyway — memory knows
+        # how long this family actually took; the model is only guessing.
+        if not brief.get("estimated_mttr_minutes"):
+            family = next(
+                (c.get("failure_class") for c in brief.get("recalled_incidents") or []
+                 if c.get("failure_class")),
+                None,
+            )
+            durations = sorted(
+                c["mttr_minutes"]
+                for c in brief.get("recalled_incidents") or []
+                if isinstance(c.get("mttr_minutes"), int)
+                and (not family or c.get("failure_class") == family)
+            )
+            if durations:
+                brief["estimated_mttr_minutes"] = durations[len(durations) // 2]
+
         brief["recommendations"] = [
             r.to_dict()
             for r in build_recommendations(brief, fp.get("service", ""), self.decisions)
         ]
         brief["prior_decisions"] = self._recall_prior_decisions(fp, assembled)
+        brief["memory_impact"] = self.memory_impact(brief, assembled)
         brief["spoken"] = speakable(brief)
         return brief
 
@@ -587,6 +607,43 @@ class StarkAgent:
             )
         )
         return {"retained": len(items), "incident_id": incident_id, **self.store.stats()}
+
+    @staticmethod
+    def memory_impact(
+        brief: dict[str, Any], assembled: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """
+        What memory actually contributed to this brief, counted rather than claimed.
+
+        Rendered at the top of both arms so the difference is visible before a word
+        of the brief is read. The no-memory arm reports honest zeros; that is the
+        whole point of showing it.
+        """
+        if not brief.get("memory_grounded"):
+            return {
+                "available": False,
+                "headline": "No organisational history available",
+                "prior_incidents": 0,
+                "confirmed_fixes": 0,
+                "known_dead_ends": 0,
+                "median_mttr_minutes": None,
+                "supporting_observations": 0,
+                "prior_decisions": 0,
+            }
+
+        recalled = brief.get("recalled_incidents") or []
+        fixes = sum(1 for a in (brief.get("first_actions") or []) if a.get("source_incident"))
+        observations = (assembled or {}).get("observations") or brief.get("observations") or []
+        return {
+            "available": True,
+            "headline": f"{len(recalled)} prior incidents inform this brief",
+            "prior_incidents": len(recalled),
+            "confirmed_fixes": fixes,
+            "known_dead_ends": len(brief.get("do_not_do") or []),
+            "median_mttr_minutes": brief.get("estimated_mttr_minutes"),
+            "supporting_observations": len(observations),
+            "prior_decisions": len(brief.get("prior_decisions") or []),
+        }
 
     # -- the approval loop -------------------------------------------------- #
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field, field_validator
 from . import llm
 from .agent import StarkAgent
 from .approvals import DECISIONS, OUTCOMES, DecisionLog
+from .benchmark import run_benchmark
+from .graph import build_graph, build_timeline, families, graph_for_alert, incident_dossier
+from .importer import SAMPLE_POSTMORTEM, parse_postmortem, to_incident
+from .ingest import SAMPLE_PAYLOADS, Inbox, normalise
 from .config import settings
 from .ledger import IncidentLedger
 from .memory import MemoryStore
@@ -31,6 +35,7 @@ settings.state_dir.mkdir(parents=True, exist_ok=True)
 store = MemoryStore(settings)
 ledger = IncidentLedger(Path(settings.state_dir) / "ledger.json")
 decisions = DecisionLog(Path(settings.state_dir) / "decisions.json")
+inbox = Inbox(Path(settings.state_dir) / "inbox.json")
 agent = StarkAgent(store, ledger, decisions)
 
 
@@ -84,6 +89,29 @@ class DecisionOutcomeRequest(BaseModel):
         return v
 
 
+class ImportPreviewRequest(BaseModel):
+    text: str = Field(..., min_length=40, description="Raw postmortem text")
+    use_llm: bool = True
+
+
+class ImportConfirmRequest(BaseModel):
+    """The reviewed record. Nothing enters memory without passing through here."""
+
+    incident_id: str
+    service: str
+    failure_class: str
+    alert_title: str
+    root_cause: str
+    fix: str
+    false_leads: str = ""
+    symptoms: str = ""
+    verification: str = ""
+    customer_impact: str = ""
+    severity: str = "SEV3"
+    mttr_minutes: int = 0
+    responder: str = "imported"
+
+
 class OutcomeRequest(BaseModel):
     incident_id: str
     service: str
@@ -117,6 +145,7 @@ def status() -> dict[str, Any]:
         "seed_corpus_size": len(INCIDENTS),
         "ledger_entries": len(ledger.entries),
         "decisions": decisions.stats(),
+        "inbox": inbox.stats(),
     }
 
 
@@ -130,6 +159,7 @@ def reset() -> dict[str, Any]:
     store.reset()
     ledger.reset()
     decisions.reset()
+    inbox.reset()
     return {"ok": True, "memory": store.stats()}
 
 
@@ -180,9 +210,153 @@ def decision_log() -> dict[str, Any]:
     return {"stats": decisions.stats(), "recent": decisions.recent()}
 
 
+@app.post("/api/webhook/alert")
+def webhook_alert(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """
+    Receive an alert from a monitoring system and triage it automatically.
+
+    Accepts Prometheus Alertmanager, Datadog, Grafana and generic JSON shapes.
+    An unrecognised body is flattened rather than rejected — a webhook endpoint
+    that returns 400 at 3am is worse than one that does something imperfect.
+    """
+    alert = normalise(payload)
+    if not alert.alert_text.strip():
+        raise HTTPException(status_code=422, detail="Could not extract any alert text.")
+
+    brief = agent.triage(alert.alert_text, use_memory=True)
+    summary = {
+        "verdict": brief["verdict"],
+        "memory_grounded": brief["memory_grounded"],
+        "confidence": brief["confidence"],
+        "estimated_mttr_minutes": brief.get("estimated_mttr_minutes"),
+        "cited": [c["incident_id"] for c in brief.get("recalled_incidents", [])][:4],
+        "recommendations": len(brief.get("recommendations", [])),
+        "spoken": brief.get("spoken", ""),
+    }
+    inbox.add(alert, summary)
+    return {"received": alert.to_dict(), "triage": brief, "summary": summary}
+
+
+@app.post("/api/webhook/simulate")
+def webhook_simulate(source: str = Body("alertmanager", embed=True)) -> dict[str, Any]:
+    """Fire one of the bundled vendor payloads at the webhook, for demos."""
+    payload = SAMPLE_PAYLOADS.get(source)
+    if payload is None:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown sample source. Try one of {sorted(SAMPLE_PAYLOADS)}."
+        )
+    return webhook_alert(payload)
+
+
+@app.get("/api/webhook/samples")
+def webhook_samples() -> dict[str, Any]:
+    return {"samples": {k: v for k, v in SAMPLE_PAYLOADS.items()}}
+
+
+@app.get("/api/inbox")
+def get_inbox() -> dict[str, Any]:
+    return {"stats": inbox.stats(), "entries": inbox.recent()}
+
+
+@app.get("/api/import/sample")
+def import_sample() -> dict[str, Any]:
+    return {"text": SAMPLE_POSTMORTEM}
+
+
+@app.post("/api/import/preview")
+def import_preview(request: ImportPreviewRequest) -> dict[str, Any]:
+    """
+    Extract a structured incident from a postmortem, for review.
+
+    Deliberately does not retain anything. A wrong root cause in the bank is worse
+    than no root cause, because it will be cited with confidence months later.
+    """
+    parsed = parse_postmortem(request.text, use_llm=request.use_llm)
+    return {"parsed": parsed.to_dict(), "preview_incident": to_incident(parsed)}
+
+
+@app.post("/api/import/confirm")
+def import_confirm(request: ImportConfirmRequest) -> dict[str, Any]:
+    """Retain a reviewed postmortem as memory."""
+    result = agent.record_outcome(
+        incident_id=request.incident_id,
+        service=request.service,
+        failure_class=request.failure_class,
+        alert_title=request.alert_title,
+        root_cause=request.root_cause,
+        fix=request.fix,
+        mttr_minutes=request.mttr_minutes,
+        responder=request.responder,
+        false_leads=request.false_leads,
+        severity=request.severity,
+        alert_payload=request.symptoms or request.alert_title,
+    )
+    return {**result, "imported": True}
+
+
 @app.get("/api/memory/observations")
 def observations() -> dict[str, Any]:
     return {"observations": store.observations()}
+
+
+@app.get("/api/memory/graph")
+def memory_graph(
+    service: str = "", failure_class: str = "", incident_id: str = ""
+) -> dict[str, Any]:
+    """The structural view: what memory holds about a service or failure family."""
+    return build_graph(
+        service=service,
+        failure_class=failure_class,
+        incident_id=incident_id,
+        decisions=decisions,
+    )
+
+
+@app.post("/api/memory/graph/for-alert")
+def memory_graph_for_alert(request: CompareRequest) -> dict[str, Any]:
+    """The situational view: only the memories this specific alert lit up."""
+    fp, hits = agent.recall_for_alert(request.alert)
+    assembled = agent.assemble(hits)
+    agent.enrich(assembled, top_n=3)
+    if not agent.score_relevance(fp, assembled):
+        return {"nodes": [], "edges": [], "empty": True, "reason": "no memory cleared the gate"}
+    return graph_for_alert(assembled, decisions=decisions)
+
+
+@app.get("/api/memory/timeline")
+def memory_timeline(failure_class: str = "") -> dict[str, Any]:
+    """One failure family in order, with what memory gained at each occurrence."""
+    if not failure_class:
+        return {"families": families()}
+    return {"families": families(), **build_timeline(failure_class)}
+
+
+@app.get("/api/why/{incident_id}")
+def why(incident_id: str) -> dict[str, Any]:
+    """Every retained fact behind one incident — the evidence for a recommendation."""
+    dossier = incident_dossier(store, incident_id.upper())
+    if dossier["empty"]:
+        raise HTTPException(status_code=404, detail=f"Memory holds nothing for {incident_id}.")
+    return dossier
+
+
+_benchmark_cache: dict[str, Any] = {}
+
+
+@app.get("/api/benchmark")
+def benchmark(refresh: bool = False) -> dict[str, Any]:
+    """
+    Controlled A/B: every incident scored twice, memory off and memory on.
+
+    Leave-one-out — the incident under test is hidden from memory, so the memory
+    arm cannot simply read the answer. Cached after the first run because the
+    result is deterministic for a given corpus.
+    """
+    if refresh or "result" not in _benchmark_cache:
+        _benchmark_cache["result"] = run_benchmark(
+            lambda store_, ledger_: StarkAgent(store_, ledger_), settings
+        )
+    return _benchmark_cache["result"]
 
 
 @app.get("/api/learning-curve")

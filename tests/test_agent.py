@@ -192,3 +192,40 @@ def test_model_output_with_typographic_dashes_is_normalised():
     })
     assert brief["verdict"] == "webhook-dispatcher failed"
     assert brief["similar_incidents"][0]["incident_id"] == "INC-1161"
+
+
+def test_memory_impact_counts_what_memory_contributed(agent: StarkAgent):
+    """The panel must be computed, not decorative — zeros when there is nothing."""
+    grounded = agent.triage(DEMO_ALERTS[0]["text"])["memory_impact"]
+    assert grounded["available"] is True
+    assert grounded["prior_incidents"] > 0
+    assert grounded["known_dead_ends"] > 0
+    assert grounded["median_mttr_minutes"]
+
+    off = agent.triage(DEMO_ALERTS[0]["text"], use_memory=False)["memory_impact"]
+    assert off["available"] is False
+    assert (off["prior_incidents"], off["confirmed_fixes"], off["known_dead_ends"]) == (0, 0, 0)
+    assert off["median_mttr_minutes"] is None
+
+
+def test_memory_impact_is_honest_on_a_novel_alert(agent: StarkAgent):
+    novel = next(a for a in DEMO_ALERTS if a["label"].startswith("Novel"))
+    impact = agent.triage(novel["text"])["memory_impact"]
+    assert impact["available"] is False
+    assert impact["prior_incidents"] == 0
+
+
+def test_mttr_falls_back_to_the_recalled_incidents(agent: StarkAgent):
+    """
+    A model that forgets to return an MTTR must not blank the estimate — memory
+    knows how long this failure family actually took.
+    """
+    brief = agent.triage(DEMO_ALERTS[0]["text"])
+    assert brief["estimated_mttr_minutes"], "grounded briefs must always carry an estimate"
+
+    families = {c["failure_class"] for c in brief["recalled_incidents"]}
+    same = sorted(
+        c["mttr_minutes"] for c in brief["recalled_incidents"]
+        if c["failure_class"] == brief["recalled_incidents"][0]["failure_class"]
+    )
+    assert brief["estimated_mttr_minutes"] in same

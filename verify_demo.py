@@ -187,7 +187,126 @@ def main() -> int:
           f"{len(again['prior_decisions'])} decisions surfaced by the same retrieval path")
 
     # ---------------------------------------------------------------- step 8
-    print("\n8. Evaluation is a held-out replay on synthetic data")
+    print("\n8. Webhook ingestion — the incident comes to STARK")
+    from app.ingest import SAMPLE_PAYLOADS  # noqa: PLC0415
+
+    parsed = {}
+    for name in ("alertmanager", "datadog", "grafana", "generic"):
+        body = c.post("/api/webhook/simulate", {"source": name})
+        parsed[name] = (body["received"]["source"], body["received"]["service"],
+                        body["summary"]["memory_grounded"])
+    check("every vendor shape parses to a service",
+          all(svc for _, svc, _ in parsed.values()),
+          " | ".join(f"{k}->{v[1]}" for k, v in parsed.items()))
+    check("known families are triaged on arrival",
+          parsed["alertmanager"][2] and parsed["datadog"][2] and parsed["grafana"][2],
+          "alertmanager, datadog and grafana payloads all landed grounded")
+    check("an unseen failure still refuses to invent precedent",
+          parsed["generic"][2] is False,
+          "the generic payload is a novel failure and was flagged as one")
+    check("an unparseable body is rejected, not silently inboxed",
+          c._c.post("/api/webhook/alert", json={}).status_code == 422,
+          "empty body -> 422")
+    inbox = c.get("/api/inbox")
+    check("inbox records every delivery", inbox["stats"]["received"] >= 4,
+          f"{inbox['stats']['received']} received, {inbox['stats']['grounded']} grounded, "
+          f"{inbox['stats']['novel']} novel, from {len(inbox['stats']['by_source'])} sources")
+
+    # ---------------------------------------------------------------- step 9
+    print("\n9. Memory graph — why STARK believes what it believes")
+    g = c.get("/api/memory/graph?service=payments-api")
+    kinds = {n["kind"] for n in g["nodes"]}
+    check("graph links service to family to incident to fix",
+          {"service", "family", "incident", "cause", "fix", "false_lead"} <= kinds,
+          f"{len(g['nodes'])} nodes, {len(g['edges'])} edges, kinds: {sorted(kinds)}")
+    again = c.get("/api/memory/graph?service=payments-api")
+    check("layout is deterministic",
+          [(n["id"], n["x"], n["y"]) for n in g["nodes"]]
+          == [(n["id"], n["x"], n["y"]) for n in again["nodes"]],
+          "identical coordinates across renders — a node you can point at")
+    novel_graph = c.post("/api/memory/graph/for-alert", {"alert": novel["text"]})
+    check("a novel alert lights up nothing", novel_graph.get("empty") is True,
+          novel_graph.get("reason", ""))
+    dossier = c.get("/api/why/INC-1131")
+    check("every recommendation can be traced to retained facts",
+          {"root_cause", "fix", "false_lead", "verification"} <= set(dossier["facts"]),
+          f"INC-1131 dossier: {dossier['fact_count']} facts across {len(dossier['facts'])} kinds")
+    timeline = c.get("/api/memory/timeline?failure_class=db-connection-pool-exhaustion")
+    check("timeline shows memory accumulating",
+          [e["memory_before"] for e in timeline["entries"]] == [0, 1, 2],
+          " -> ".join(f"{e['incident_id']} ({e['mttr_minutes']}m, {e['memory_before']} prior)"
+                      for e in timeline["entries"]))
+
+    # ---------------------------------------------------------------- step 10
+    print("\n10. Controlled A/B — same alerts, memory off vs memory on")
+    bm = c.get("/api/benchmark")
+    off, on = bm["arms"]
+    check("both arms scored every incident",
+          off["scored"] == on["scored"] == 21,
+          f"{off['scored']} incidents x 2 arms, synthesis: {bm['synthesis']}")
+    check("leave-one-out held out the incident under test",
+          all(row["incident_id"] not in row["cited"] for row in bm["rows"]["with_memory"]),
+          "no run cited the incident it was being scored on")
+    # Deliberately NOT an assertion. With a capable LLM the no-memory arm often
+    # names the mechanism from the alert text alone — the signature is right there
+    # in the log line. Memory's contribution is knowing what to do about it, not
+    # what to call it. Asserting a win here would encode a claim that is false on
+    # the LLM path, so the row is reported and left for the reader to judge.
+    mech_off = round(off["identified_failure_family"] * 100)
+    mech_on = round(on["identified_failure_family"] * 100)
+    print(f"  [INFO] failure mechanism named: {mech_off}% without memory, {mech_on}% with")
+    print("         path-dependent — a strong model reads the mechanism off the alert itself")
+    check("memory gives more applicable advice",
+          on["concrete_action"] > off["concrete_action"],
+          f"{round(off['concrete_action']*100)}% -> {round(on['concrete_action']*100)}% "
+          "contain a real parameter or config key")
+    check("memory repeats fewer known dead ends",
+          on["repeats_known_dead_end"] <= off["repeats_known_dead_end"],
+          bm["headline"]["statement"])
+    check("rows the no-memory arm cannot win are labelled constructive",
+          bm["row_meta"]["cited_correct_precedent"]["constructive"] is True
+          and bm["row_meta"]["identified_failure_family"]["constructive"] is False,
+          "citation rows flagged; mechanism, dead-end and concreteness rows are real comparisons")
+    audited = [r for r in bm["rows"]["without_memory"] if r["dead_end_match"]]
+    check("every dead-end hit is auditable",
+          all(r["dead_end_match"]["shared_terms"] for r in audited),
+          f"{len(audited)} hit(s), each carrying the matched terms")
+
+    # ---------------------------------------------------------------- step 11
+    print("\n11. Bring your own incidents — real postmortem import")
+    sample = c.get("/api/import/sample")["text"]
+    before_facts = c.get("/api/status")["memory"]["facts"]
+    preview = c.post("/api/import/preview", {"text": sample, "use_llm": False})["parsed"]
+    check("a real postmortem parses with no model and no key",
+          preview["method"] == "headings" and preview["confidence"] == "high",
+          f"{preview['incident_id']} · {preview['service']} · {preview['severity']} · "
+          f"{preview['mttr_minutes']} min")
+    check("the dead end survives the round trip",
+          "waste of time" in preview["false_leads"],
+          preview["false_leads"][:96] + "...")
+    check("preview retains nothing",
+          c.get("/api/status")["memory"]["facts"] == before_facts,
+          "review before retention — a wrong root cause in the bank is worse than none")
+
+    novel_alert = ("ALERT: CheckoutApi502\nservice=checkout-api\n"
+                   "log: upstream connect error or disconnect/reset before headers\n502 rate 30%")
+    check("the matching alert is novel before import",
+          c.post("/api/triage", {"alert": novel_alert})["memory_grounded"] is False,
+          "checkout-api has no precedent in the bundled corpus")
+    fields = ("incident_id", "service", "failure_class", "alert_title", "root_cause", "fix",
+              "false_leads", "symptoms", "verification", "customer_impact", "severity",
+              "mttr_minutes", "responder")
+    c.post("/api/import/confirm", {k: preview[k] for k in fields})
+    imported = c.post("/api/triage", {"alert": novel_alert})
+    check("the same alert is grounded after import",
+          imported["memory_grounded"] is True,
+          imported["verdict"][:96])
+    check("the imported dead end is recalled",
+          bool(imported["do_not_do"]),
+          next((d["action"][:96] for d in imported["do_not_do"]), ""))
+
+    # ---------------------------------------------------------------- step 12
+    print("\n12. Evaluation is a held-out replay on synthetic data")
     c.post("/api/seed")  # clear the decisions made above before evaluating
     lc = c.get("/api/learning-curve")
     p, conf = lc["provenance"], lc["confusion"]
@@ -219,6 +338,10 @@ def main() -> int:
     print("             -> same alert now answered from the new memory")
     print("  decisions  propose -> human approves or rejects -> outcome -> retained")
     print("             -> next run reranks on what this team actually trusted")
+    print("  ingestion  monitoring webhook -> normalise -> fingerprint -> triage -> inbox")
+    print("  evidence   every belief traceable to the retained facts behind it")
+    print("  benchmark  same alerts, both arms, leave-one-out, audit trail per hit")
+    print("  import     paste a real postmortem -> reviewed -> retained -> recalled")
     return 0
 
 

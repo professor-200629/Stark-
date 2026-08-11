@@ -104,6 +104,14 @@ demoted but stay visible with the reason they fell.
 
 Code: `app/approvals.py`, `StarkAgent.record_decision`, `StarkAgent._recall_prior_decisions`.
 
+## Making the memory inspectable
+
+`GET /api/memory/graph` and `GET /api/why/{incident_id}` exist because a memory system that cannot
+show its working is indistinguishable from a confident language model. The graph renders the path
+from service to failure family to incident to root cause, fix and dead end; the dossier returns
+every retained fact behind a single incident, grouped by kind. Both read from the same bank the
+agent reasons over — no separate index, no shadow copy.
+
 ## Portability
 
 `app/memory.py` defines one interface with two implementations: `HindsightBackend` (the official

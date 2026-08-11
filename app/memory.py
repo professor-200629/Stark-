@@ -392,7 +392,15 @@ class LocalMemoryEngine:
         types: Sequence[str] | None = None,
         limit: int = 12,
         metadata_filter: dict[str, Any] | None = None,
+        exclude: dict[str, Any] | None = None,
     ) -> list[MemoryHit]:
+        """
+        `exclude` hides facts whose metadata matches, without deleting them.
+
+        This exists for leave-one-out evaluation: scoring an incident against a
+        memory that contains it would be reading the answer sheet, and rebuilding
+        the whole bank once per incident is needlessly slow.
+        """
         with self._lock:
             if not self._facts:
                 return []
@@ -411,6 +419,8 @@ class LocalMemoryEngine:
             scored: list[MemoryHit] = []
             for fact in self._facts:
                 if metadata_filter and any(fact.metadata.get(k) != v for k, v in metadata_filter.items()):
+                    continue
+                if exclude and any(fact.metadata.get(k) == v for k, v in exclude.items()):
                     continue
 
                 strategies: list[str] = []
@@ -451,6 +461,10 @@ class LocalMemoryEngine:
 
             # observations + mental models compete at higher priority
             for obs in self._observations.values():
+                if exclude and exclude.get("incident_id") in obs.metadata.get("incident_ids", []):
+                    # An observation consolidated from the held-out incident still
+                    # carries its evidence, so it has to be hidden as well.
+                    continue
                 direct = len(query_entities & obs.entities)
                 overlap = len(set(query_tokens) & set(tokenize(obs.text)))
                 if not direct and not overlap:
@@ -714,9 +728,15 @@ BANK_DIRECTIVES = (
 class MemoryStore:
     """Picks the Hindsight backend when configured, local engine otherwise."""
 
+    #: Facts whose metadata matches are hidden from recall without being deleted.
+    #: Declared at class level because several call sites build a scratch store via
+    #: ``MemoryStore.__new__`` to avoid touching the live bank, which skips __init__.
+    exclude: dict[str, Any] | None = None
+
     def __init__(self, settings) -> None:  # noqa: ANN001 - avoid circular import
         self.settings = settings
         self.mode = "local"
+        self.exclude = None
         self.backend: Any
         state_path = Path(settings.state_dir) / "memory.json"
         if settings.hindsight_enabled:
@@ -741,7 +761,20 @@ class MemoryStore:
         return self.backend.retain(items)
 
     def recall(self, query: str, **kwargs: Any) -> list[MemoryHit]:
-        return self.backend.recall(query, **kwargs)
+        if self.exclude and "exclude" not in kwargs:
+            kwargs["exclude"] = self.exclude
+        try:
+            return self.backend.recall(query, **kwargs)
+        except TypeError:
+            # Backends that do not support exclusion (Hindsight) filter after the fact.
+            kwargs.pop("exclude", None)
+            hits = self.backend.recall(query, **kwargs)
+            if not self.exclude:
+                return hits
+            return [
+                h for h in hits
+                if not any(h.metadata.get(k) == v for k, v in self.exclude.items())
+            ]
 
     def reflect(self, query: str, context: str = "") -> str | None:
         reflect = getattr(self.backend, "reflect", None)

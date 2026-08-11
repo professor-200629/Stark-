@@ -17,24 +17,41 @@ the exact false lead that cost the last responder fifteen minutes.
 The knowledge exists. It is just scattered across postmortem docs nobody reads and the heads of
 people who are asleep.
 
-In the incident corpus shipped with this project, the numbers say it plainly:
+### The motivation — a property of the data, not a result
 
-| | Median time to resolve |
-|---|---|
-| First time the team saw a failure family | **72.5 min** |
-| A repeat, once someone remembered the last one | **43 min** |
+In the synthetic incident corpus shipped with this project, repeat failure families have a **41%
+lower median time to resolve** than first-time failures (72.5 min → 43 min).
 
-**A 41% drop, purely from having seen it before.** (By mean it is 59%, but three long-tail
-first-time incidents drag the mean, so the median is the honest headline — see
-[METRICS.md](METRICS.md).) This is a property of the corpus, not a result STARK produced: it is
-the reason the product exists, not evidence that it works.
+**Nothing produced that gap except human memory.** It is the shape of the problem STARK is built
+to attack — it is *not* a measurement of STARK, and no part of it should be read as one. By mean
+the gap is 59%, but three long-tail first-time incidents drag the mean, so the median is the
+honest figure. Derivation in [METRICS.md](METRICS.md).
 
-STARK's job is to make that drop happen on the *first* repeat rather than the third — and to make
-it happen for the responder who was not there last time.
+### What memory is actually for
+
+A good model already diagnoses well. On the LLM path the memoryless arm names the failure mechanism
+57% of the time — the alert signature gives it away. Memory does not raise that number.
+
+What memory holds is the part no model can infer: that this team already tried rolling back the
+deploy and it was innocent, that PgBouncer is already at 80 in production, that the fix which
+worked took 43 minutes. That is institutional, not general, knowledge.
+
+### What STARK itself achieves
+
+On a chronological held-out replay of those same 21 incidents — each one scored using only the
+memories that existed strictly before it — STARK reaches **43% memory coverage** and surfaces the
+correct precedent **9 times out of 9** when one exists, while correctly declining to invent one on
+**9 of 12** novel alerts.
+
+These are retrieval-behaviour results on synthetic data. STARK has never run against a production
+incident and claims no production MTTR reduction.
+
+Its job is to make the gap above close on the *first* repeat rather than the third — and for the
+responder who was not there last time.
 
 ## What STARK does
 
-Paste a raw alert. STARK fingerprints it, recalls every relevant thing the team has ever
+An alert arrives — POSTed by Alertmanager, Datadog or Grafana, or pasted by hand. STARK fingerprints it, recalls every relevant thing the team has ever
 learned, and returns a triage brief that cites its sources:
 
 - **the past incidents this resembles**, with incident IDs and similarity
@@ -43,6 +60,8 @@ learned, and returns a triage brief that cites its sources:
 - **a "do NOT do" list** — the false leads that burned real minutes in past incidents
 - **an honest "I have never seen this"** when memory holds no precedent
 - **recommendations you rule on** — approve, reject, or investigate, with the reason remembered
+- **a memory impact panel** — prior incidents, fixes that worked, known dead ends, historical
+  median. It reads all zeros when memory is off or the alert is novel, which is the point
 
 You can also just ask it out loud — see [Voice](#voice) below.
 
@@ -111,6 +130,168 @@ export HINDSIGHT_API_LLM_API_KEY=$GROQ_API_KEY
 hindsight-api                       # serves on :8888
 # then, in .env:
 HINDSIGHT_BASE_URL=http://localhost:8888
+```
+
+---
+
+## Memory off vs memory on — a controlled comparison
+
+`GET /api/benchmark` scores **every incident twice**: once with memory disabled, once with a
+memory holding all twenty others and never the one under test. Identical alert text, identical
+model, identical prompts apart from the recalled memories.
+
+> ### STARK prevented 2 historically-proven dead ends.
+>
+> Without memory, the agent recommended something this team had already proved was a waste of time
+> on **2 of 21** incidents. With memory, **0 of 21**.
+
+Rows ordered by how hard they are to attack. Two synthesis paths are shown because the numbers
+differ, and reporting only the flattering one would be dishonest:
+
+| Metric | Deterministic path | With Groq `gpt-oss-120b` |
+|---|---|---|
+| | no mem → mem | no mem → mem |
+| **Recommended a known dead end** | **2/21 → 0/21** | **1/21 → 0/21** |
+| **Gave an action you could actually apply** | **0% → 67%** | **33% → 67%** |
+| Named the right failure mechanism *(path-dependent)* | 0% → 38% | **57% → 38%** |
+| Incident citations offered *(supporting)* | 0 → 39 | 0 → 39 |
+| Cited a real matching incident *(constructive)* | 0% → 76% | — |
+| Declined when no precedent existed *(constructive)* | 100% *(vacuous)* → 20% | — |
+
+**Read the third row carefully: memory loses it on the LLM path, and that is not hidden here.**
+A capable model reads the failure mechanism straight off the alert — `HikariPool-1 - Connection is
+not available` names its own cause. Memory does not make the model better at diagnosis, and
+pretending otherwise would be the easiest claim in this project to disprove.
+
+What memory contributes is the two rows above it, and neither can be derived from the alert text at
+any model quality:
+
+- **what not to waste time on** — recorded only in this team's postmortems
+- **what to actually change** — a parameter someone already tuned in production
+
+**The citation rows are supporting evidence, not the argument.** The no-memory arm scores zero on
+them by definition — it has no incident IDs to cite — so "0 vs 39" is arithmetic dressed as
+evidence. The 100% on the final row is vacuous for the same reason: it declines everything, always.
+
+Lead with the dead-end row. It is the only one where both arms could have scored, both were capable
+of scoring, and only one did.
+
+Both hits are auditable in the UI — the advice, the recorded dead end, and the words that matched.
+Both were *"check recent deploys and roll back if one correlates in time"* against INC-1042 and
+INC-1131, where the postmortems record that the team almost rolled back an innocent deploy. That is
+the product in one line: the memoryless agent gave textbook-correct advice that this specific team
+had already paid to learn was wrong.
+
+Leave-one-out matters more than it sounds: without it the memory arm is reading the answer sheet
+and the whole table is worthless. `test_leave_one_out_hides_the_incident_under_test` asserts no run
+ever cited the incident it was being scored on.
+
+**The weakest result is on that last row and it is reported anyway.** With the full corpus in
+memory, STARK grounds a one-off failure on a different family from the same service 4 times out of
+5. A table that only showed the rows we win would not be evidence.
+
+---
+
+## Bring your own incidents
+
+The bundled corpus is synthetic and labelled as such on every screen. This is the path out of it.
+
+`POST /api/import/preview` takes a real postmortem and extracts a structured incident — incident
+ID, service, severity, MTTR, root cause, the fix, and the dead end. Two extraction paths:
+
+- **headings** — deterministic. Postmortems follow templates (`## Root cause`, `Resolution:`,
+  `What didn't work`), so a heading parser handles most documents with no model, no API key, and
+  nothing leaving the machine.
+- **llm** — used only when a key is configured *and* the heading parser came back thin.
+
+Nothing is retained until you confirm it. `preview` deliberately writes nothing:
+
+> A wrong root cause in the bank is worse than no root cause, because it will be cited with
+> confidence six months from now.
+
+The extraction reports its own confidence, which fields are missing, and warns when there is no
+dead end recorded — that field being the most valuable thing in a postmortem.
+
+The full loop, verified end to end in `verify_demo.py`:
+
+```
+paste a real postmortem  →  parsed (INC-2291, checkout-api, SEV1, 47 min)
+                         →  reviewed and confirmed
+                         →  8 memories retained
+an alert that was novel  →  now grounded, cites INC-2291,
+                            and recalls "restarting the ingress controller made it worse"
+```
+
+---
+
+## Ingestion — the incident comes to STARK
+
+```
+monitoring system ──POST──▶ /api/webhook/alert
+                                   │
+                normalise ─ fingerprint ─ recall ─ grounding gate
+                                   │
+                        triage brief ─ recommendations
+                                   │
+                              human decision
+                                   │
+                                 memory
+```
+
+`POST /api/webhook/alert` accepts **Prometheus Alertmanager, Datadog, Grafana and generic JSON**.
+Each shape scatters the useful signal differently — service name in `labels.service`, in a
+`service:` tag, or in a `tags` dict; the log line in an annotation, a `body`, or a `logs` field —
+so the parser pulls all of it into the plain alert text the fingerprinter already understands. The
+triage path is then identical whether a human pasted the alert or a monitor fired it at 03:00.
+
+An unrecognised payload is **flattened, not rejected**. A webhook endpoint that returns 400 at 3am
+because a vendor renamed a field is worse than one that does something imperfect. The only body
+that gets a 422 is one with nothing extractable in it at all.
+
+Fire one over real HTTP:
+
+```bash
+python tools/fire_alert.py               # Alertmanager
+python tools/fire_alert.py datadog       # a different vendor shape
+python tools/fire_alert.py --file my_payload.json
+```
+
+The **Inbox** tab shows what arrived, how it was parsed, and what STARK made of it. Click any entry
+to open it in triage.
+
+---
+
+## The memory graph — why STARK believes what it believes
+
+Lists answer *what did you recall?*. The graph answers the question that decides whether anyone
+trusts the output:
+
+```
+payments-api ──▶ db-connection-pool-exhaustion ──▶ INC-1131 ──▶ root cause
+                                                            ──▶ fix that worked
+                                                            ──▶ dead end
+                                              ──▶ INC-1088 ──▶ …
+                                              ──▶ team decision (approved, confirmed to work)
+```
+
+Two views. **Structural** (`GET /api/memory/graph?service=…`) shows everything memory holds about a
+service or failure family. **Situational** (`POST /api/memory/graph/for-alert`) shows only the
+memories a live alert actually lit up — and returns empty when the grounding gate refuses, so the
+picture never implies evidence the brief does not have.
+
+Layout is computed server-side in deterministic layered columns rather than by a force simulation.
+A graph that rearranges itself on every render looks livelier and is useless on stage: you cannot
+point at a node that moved.
+
+Clicking any incident calls `GET /api/why/{incident_id}`, which returns every retained fact behind
+it grouped by kind — alert, symptoms, root cause, fix, dead end, verification, impact. That is the
+difference between asserting a recommendation is supported and showing the evidence.
+
+The **family timeline** (`GET /api/memory/timeline?failure_class=…`) plays one failure family in
+order, with how many prior incidents memory held at each step:
+
+```
+INC-1042 (74 min, 0 prior)  →  INC-1088 (52 min, 1 prior)  →  INC-1131 (43 min, 2 prior)
 ```
 
 ---
@@ -331,6 +512,10 @@ recall, and for on-call work recall is the more expensive side to lose.
 | `app/memory.py` | Hindsight adapter + interface-compatible local engine, observations, entity extraction |
 | `app/agent.py` | fingerprinting, recall, second-hop enrichment, grounding gate, briefs, write-back, evaluation |
 | `app/llm.py` | Groq client with JSON recovery + deterministic fallback |
+| `app/benchmark.py` | leave-one-out A/B harness, scoring rubric, audit trail |
+| `app/importer.py` | postmortem extraction (heading parser, optional LLM), review-before-retain |
+| `app/ingest.py` | webhook normalisation for Alertmanager, Datadog, Grafana and generic payloads |
+| `app/graph.py` | memory graph, family timeline, per-incident evidence dossiers |
 | `app/approvals.py` | recommendations, risk classification, decision log, track records, reranking |
 | `app/voice.py` | composes the spoken briefing (ID normalisation, clause trimming, length budget) |
 | `app/ledger.py` | structured MTTR bookkeeping (charts only — never used to answer a triage question) |
@@ -350,6 +535,16 @@ recall, and for on-call work recall is the more expensive side to lose.
 | `POST /api/decision` | Approve / reject / investigate a recommendation; retained to memory |
 | `POST /api/decision/outcome` | Did the approved action actually work? |
 | `GET /api/decisions` | Decision log and approval statistics |
+| `POST /api/webhook/alert` | Ingest an alert from a monitoring system and triage it on arrival |
+| `POST /api/webhook/simulate` | Fire a bundled vendor payload at the webhook |
+| `GET /api/inbox` | What arrived, how it parsed, what STARK made of it |
+| `GET /api/memory/graph` | Structural graph for a service or failure family |
+| `POST /api/memory/graph/for-alert` | Only the memories a live alert lit up |
+| `GET /api/memory/timeline` | One failure family in order, with memory accumulating |
+| `GET /api/why/{incident_id}` | Every retained fact behind one incident |
+| `GET /api/benchmark` | Controlled A/B across all incidents, leave-one-out |
+| `POST /api/import/preview` | Extract a structured incident from a postmortem (retains nothing) |
+| `POST /api/import/confirm` | Retain a reviewed postmortem as memory |
 | `GET /api/memory/observations` | Consolidated beliefs with proof counts |
 | `GET /api/learning-curve` | Held-out chronological replay + MTTR analysis |
 | `GET /api/incidents` | The corpus |
@@ -362,23 +557,27 @@ python verify_demo.py                                # in-process, no server nee
 python verify_demo.py --url http://127.0.0.1:8000    # against a running server
 ```
 
-32 checks walking both loops in order. The incident loop: seed, recall, grounded brief with
+55 checks walking every loop in order. The incident loop: seed, recall, grounded brief with
 citations, the grounding gate refusing a novel alert, teaching STARK an outcome, and the same alert
 now answered from that new memory. The decision loop: propose, reject one with a reason, approve
 another and confirm it worked, then re-run and watch the ranking change. Plain-text output, meant
-to be pasted to anyone who wants evidence rather than screenshots.
+to be pasted to anyone who wants evidence rather than screenshots. It also covers webhook
+ingestion across four vendor shapes and the graph, timeline and evidence views.
 
 ## Tests
 
 ```bash
-pytest -q     # 73 tests
+pytest -q     # 159 tests
 ```
 
 Covers entity extraction, observation consolidation and proof counts, fingerprinting, the grounding
 gate on both sides (grounded *and* correctly-novel), the memory-off/memory-on delta, the write-back
 loop making a previously-novel alert grounded, that the spoken briefing stays listenable and never
 leaks a raw incident ID, that a rejected recommendation is demoted but never silently dropped, and
-that the learning-curve replay never looks ahead.
+that the learning-curve replay never looks ahead, that every vendor webhook shape keeps the
+service name and the log signature, that the graph layout is deterministic, that the benchmark's
+leave-one-out never leaks the incident under test, and that postmortem import invents nothing for
+an empty document.
 
 ## The data
 
