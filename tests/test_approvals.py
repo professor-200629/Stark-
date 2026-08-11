@@ -176,7 +176,9 @@ def test_past_decisions_are_recalled_on_a_later_alert(agent: StarkAgent):
 
 def test_a_confirmed_success_is_promoted_to_the_top(agent: StarkAgent):
     recs = agent.triage(DEMO_ALERTS[0]["text"])["recommendations"]
-    chosen = recs[1]
+    # Pick one anchored to a source incident: its key survives the model
+    # rewording the advice between runs, which is the whole point of the anchor.
+    chosen = next(r for r in recs if r["source_incident"])
     agent.record_decision(
         recommendation_key=chosen["key"], decision=APPROVE, action=chosen["action"],
         service="payments-api", failure_class=chosen["failure_class"], decided_by="priya",
@@ -190,7 +192,7 @@ def test_a_confirmed_success_is_promoted_to_the_top(agent: StarkAgent):
 def test_a_rejected_action_is_demoted_but_still_visible(agent: StarkAgent):
     """Hiding it would lose the reason it was rejected — which is the useful part."""
     recs = agent.triage(DEMO_ALERTS[0]["text"])["recommendations"]
-    rejected = recs[0]
+    rejected = next(r for r in recs if r["source_incident"])
     agent.record_decision(
         recommendation_key=rejected["key"], decision=REJECT, action=rejected["action"],
         service="payments-api", failure_class=rejected["failure_class"],
@@ -212,3 +214,27 @@ def test_reseeding_clears_the_decision_log(agent: StarkAgent):
     assert agent.decisions.stats()["decisions"] == 1
     agent.seed()
     assert agent.decisions.stats()["decisions"] == 0
+
+
+def test_key_survives_the_model_rewording_the_advice():
+    """
+    An LLM paraphrases every sentence it writes. If the key were derived from the
+    text, a fresh key would be minted on every run and no team decision would ever
+    stick to a recommendation — the approval loop would silently do nothing.
+    """
+    a = recommendation_key("payments-api", "pool", "Raise default_pool_size to 80", "INC-1131")
+    b = recommendation_key("payments-api", "pool", "Increase the PgBouncer pool size", "INC-1131")
+    assert a == b
+
+
+def test_advice_from_different_incidents_stays_distinct():
+    a = recommendation_key("payments-api", "pool", "same words", "INC-1131")
+    b = recommendation_key("payments-api", "pool", "same words", "INC-1042")
+    assert a != b
+
+
+def test_unsourced_advice_still_keys_on_its_text():
+    """Curated playbook steps have no source incident to anchor to."""
+    a = recommendation_key("payments-api", "pool", "Check hikaricp_connections_pending")
+    b = recommendation_key("payments-api", "pool", "Check hikaricp_connections_pending")
+    assert a == b

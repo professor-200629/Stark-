@@ -68,8 +68,24 @@ def _normalise(action: str) -> str:
     return " ".join(text.split())[:220]
 
 
-def recommendation_key(service: str, failure_class: str, action: str) -> str:
-    raw = f"{service or '?'}::{failure_class or '?'}::{_normalise(action)}"
+def recommendation_key(
+    service: str, failure_class: str, action: str, source_incident: str = ""
+) -> str:
+    """
+    A stable identity for "this piece of advice", so a track record can accumulate.
+
+    When the advice came from a specific past incident, that incident *is* the
+    identity — keying on the sentence instead breaks the moment an LLM paraphrases
+    it, and an LLM paraphrases everything. Without this, the same recommendation
+    gets a fresh key on every run and no team decision ever sticks to it.
+
+    Only advice with no source incident (curated playbooks, generic steps) falls
+    back to hashing the normalised text.
+    """
+    if source_incident:
+        raw = f"{service or '?'}::{failure_class or '?'}::src::{source_incident}"
+    else:
+        raw = f"{service or '?'}::{failure_class or '?'}::{_normalise(action)}"
     return "REC-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
 
 
@@ -320,12 +336,12 @@ def build_recommendations(
         step = (action.get("step") or "").strip()
         if not step:
             continue
-        key = recommendation_key(service, failure_class, step)
+        source = action.get("source_incident") or ""
+        key = recommendation_key(service, failure_class, step, source)
         if key in seen:
             continue
         seen.add(key)
 
-        source = action.get("source_incident") or ""
         evidence = [source] if source else []
         for cause in brief.get("likely_root_causes") or []:
             for inc in cause.get("supporting_incidents") or []:

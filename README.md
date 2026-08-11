@@ -332,9 +332,11 @@ visible**, carrying the reason it fell, because hiding it would throw away the u
 
 Two design choices worth defending:
 
-- **Recommendation keys ignore tuned numbers.** `Raise default_pool_size to 20` and `…to 80` hash
-  to the same key, so a track record accumulates across incidents instead of resetting every time
-  someone changes a value.
+- **Recommendation keys are anchored to their source incident, not their wording.** An LLM
+  paraphrases every sentence it writes; keying on the text would mint a fresh key on every run and
+  no team decision would ever stick to a recommendation — the approval loop would silently do
+  nothing. Advice with no source incident falls back to hashing the normalised text, where tuned
+  numbers are ignored so `default_pool_size to 20` and `…to 80` remain the same advice.
 - **A novel alert proposes nothing.** With no precedent, STARK has no business asking anyone to
   approve a production change, so the approval panel stays empty and the brief stands as advice
   only.
@@ -512,6 +514,7 @@ recall, and for on-call work recall is the more expensive side to lose.
 | `app/memory.py` | Hindsight adapter + interface-compatible local engine, observations, entity extraction |
 | `app/agent.py` | fingerprinting, recall, second-hop enrichment, grounding gate, briefs, write-back, evaluation |
 | `app/llm.py` | Groq client with JSON recovery + deterministic fallback |
+| `tests/conftest.py` | forces deterministic synthesis so assertions are reproducible |
 | `app/benchmark.py` | leave-one-out A/B harness, scoring rubric, audit trail |
 | `app/importer.py` | postmortem extraction (heading parser, optional LLM), review-before-retain |
 | `app/ingest.py` | webhook normalisation for Alertmanager, Datadog, Grafana and generic payloads |
@@ -567,8 +570,15 @@ ingestion across four vendor shapes and the graph, timeline and evidence views.
 ## Tests
 
 ```bash
-pytest -q     # 159 tests
+pytest -q                    # 165 tests, ~12s
+STARK_TEST_LLM=1 pytest -q   # same suite against a live LLM (slow, non-deterministic)
 ```
+
+The suite runs against the **deterministic synthesis path** by default. An assertion like
+*"the approved recommendation is ranked first"* cannot be evaluated when the text under test is
+regenerated on every call, and a test that fails one run in five is worse than no test. The LLM
+path is covered by `verify_demo.py`, which runs end to end against whatever is configured — that
+separation is how two LLM-only bugs were caught: unstable recommendation keys, and a missing MTTR.
 
 Covers entity extraction, observation consolidation and proof counts, fingerprinting, the grounding
 gate on both sides (grounded *and* correctly-novel), the memory-off/memory-on delta, the write-back

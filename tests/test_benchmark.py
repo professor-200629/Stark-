@@ -63,9 +63,18 @@ def test_memory_arm_cites_evidence_and_the_other_cannot(result):
     assert on["evidence_citations"] > 20
 
 
-def test_memory_arm_names_the_failure_mechanism_more_often(result):
+def test_mechanism_row_is_reported_but_never_claimed_as_a_win(result):
+    """
+    Memory does not make the model a better diagnostician, and asserting that it
+    does encodes a claim that is false on the LLM path — a capable model reads the
+    failure mechanism straight off the alert signature. The row must exist, be
+    flagged path-dependent, and say so in its own note.
+    """
     off, on = result["arms"]
-    assert on["identified_failure_family"] > off["identified_failure_family"]
+    assert "identified_failure_family" in off and "identified_failure_family" in on
+    meta = ROW_META["identified_failure_family"]
+    assert meta["path_dependent"] is True
+    assert "not a memory win" in meta["note"].lower()
 
 
 def test_memory_arm_gives_more_concrete_advice(result):
