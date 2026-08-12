@@ -119,7 +119,7 @@ Same alert text, same model, same prompts. The only thing that changed is the ba
 
 Grounded briefs propose actions; a human approves, rejects or defers each one. That ruling is retained as an experience fact in the same bank:
 
-> On 2026-08-10, priya rejected STARK's recommendation for payments-api (db-connection-pool-exhaustion): raise default_pool_size to 80. Reason given: PgBouncer is already at 80 in prod since INC-1131.
+> On 2026-08-11, priya rejected STARK's recommendation for payments-api (db-connection-pool-exhaustion): raise default_pool_size to 80. Reason given: PgBouncer is already at 80 in prod since INC-1131.
 
 Next time a similar alert fires, the recall that surfaces past incidents surfaces past decisions too — same retrieval path, same object type. Confirmed successes get promoted; rejected actions are demoted but kept visible with the reason they fell.
 
