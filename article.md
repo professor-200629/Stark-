@@ -80,7 +80,11 @@ An incident does not go into the bank as a document — a postmortem stored whol
         )
 ```
 
-The fix and the false lead are experience facts — things this team *did*, weighted above objective system behaviour at recall. Every item carries `incident_id`, `service`, `failure_class` and `mttr_minutes` as metadata, which is what lets flat search hits be reassembled into incident cards.
+The fix and the false lead are experience facts — things this team *did*, weighted above objective system behaviour at recall. Every item carries `incident_id`, `service`, `failure_class` and `mttr_minutes` as metadata, which is what lets flat search hits be reassembled into incident cards. The relevant memories come back as a graph:
+
+![STARK's memory graph — atomic world and experience facts retrieved for a given alert](docs/screenshots/memory-graph.png)
+
+*Memory graph: the atomic world and experience facts STARK pulls in for each alert.*
 
 Recall blends keyword, semantic, entity-graph and temporal signals. On top I added a second hop: once the top incidents are known, go back and ask for *their* root cause, fix and false lead. One hop tells you which incident resembles this; two tell you what to do about it.
 
@@ -130,6 +134,18 @@ One bug is worth recording. Recommendation keys were hashed from the action text
 `GET /api/benchmark` scores every incident twice, memory off and on, with the incident under test hidden from the bank at recall time. Without leave-one-out the memory arm is reading the answer sheet.
 
 The result I'd defend: **without memory the agent recommended something this team had already proved was a waste of time on 2 of 21 incidents. With memory, 0 of 21.** Both hits were *"check recent deploys and roll back if one correlates in time"*, matched against INC-1042 and INC-1131, whose postmortems record the team almost rolling back an innocent deploy. Textbook-correct advice this specific team had already paid to learn was wrong. Advice containing a real parameter or config key went from 0% to 67%.
+
+Side by side, that is what the triage turns into once memory is switched on:
+
+![Triage with and without Hindsight memory — the grounded brief recalls the prior incident instead of reopening it cold](docs/screenshots/triage-memory-comparison.png)
+
+*Triage verdicts: without memory vs with Hindsight memory.*
+
+The retrieval quality behind those numbers, against the held-out replay:
+
+![Benchmark run across the corpus with memory on, scored per incident](docs/screenshots/learning-evaluation.png)
+
+*Learning-evaluation run: how the grounded memories performed across the corpus.*
 
 The row I point at myself is the one memory loses. With a capable model the memoryless arm names the failure mechanism *more* often than the grounded one; `HikariPool-1 - Connection is not available` names its own cause. Memory does not make the model a better diagnostician, and the code says so in that row's own metadata rather than quietly omitting it.
 
