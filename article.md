@@ -135,6 +135,12 @@ One bug is worth recording. Recommendation keys were hashed from the action text
 
 The result I'd defend: **without memory the agent recommended something this team had already proved was a waste of time on 2 of 21 incidents. With memory, 0 of 21.** Both hits were *"check recent deploys and roll back if one correlates in time"*, matched against INC-1042 and INC-1131, whose postmortems record the team almost rolling back an innocent deploy. Textbook-correct advice this specific team had already paid to learn was wrong. Advice containing a real parameter or config key went from 0% to 67%.
 
+Before memory is in the picture, an alert opens a triage that comes to the engineer cold:
+
+![The triage before memory — the alert opened with no recalled incidents in context](docs/screenshots/triage-before.png)
+
+*Triage before: a cold open, no recalled memories in context.*
+
 Side by side, that is what the triage turns into once memory is switched on:
 
 ![Triage with and without Hindsight memory — the grounded brief recalls the prior incident instead of reopening it cold](docs/screenshots/triage-memory-comparison.png)
